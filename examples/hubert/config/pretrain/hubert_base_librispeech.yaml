@@ -2,6 +2,7 @@
 
 common:
   fp16: true
+  fp16_scale_tolerance: 0.2
   log_format: json
   log_interval: 200
   seed: 1337
@@ -16,19 +17,18 @@ checkpoint:
 distributed_training:
   ddp_backend: no_c10d
   distributed_backend: 'nccl'
-  distributed_world_size: 32
-  distributed_port: 29671
-  nprocs_per_node: 8
+  distributed_world_size: 2
+  nprocs_per_node: 2
   find_unused_parameters: true
 
 task:
   _name: hubert_pretraining
-  data: ???
-  label_dir: ???
-  labels: ???
+  data: /home1/jesuraj/asr/gmmhubert/data/fairseq_data/data/
+  label_dir: /home1/jesuraj/asr/gmmhubert/data/fairseq_data/kmeans_feats/dump/
+  labels: 100
   label_rate: ${model.label_rate}
   sample_rate: 16000
-  max_sample_size: 250000
+  max_sample_size: 250000 
   min_sample_size: 32000
   pad_audio: false
   random_crop: true
@@ -36,10 +36,11 @@ task:
 
 dataset:
   num_workers: 6
-  max_tokens: 1400000
+  max_tokens: 2500000
   skip_invalid_size_inputs_valid_test: true
   validate_interval: 5
   validate_interval_updates: 10000
+  valid_subset: dev
 
 criterion:
   _name: hubert
@@ -49,8 +50,9 @@ criterion:
 
 optimization:
   max_update: 400000
-  lr: [0.0005]
-  clip_norm: 10.0
+  lr: [0.0001]
+  clip_norm: 1.0
+  update_freq: [16]
 
 optimizer:
   _name: adam
@@ -91,7 +93,7 @@ hydra:
           - task.data
           - task.label_dir
   run:
-    dir: ???
+    dir: /home1/jesuraj/asr/gmmhubert/exp/fairseq/
   sweep:
-    dir: ???
+    dir: /home1/jesuraj/asr/gmmhubert/exp/fairseq/
     subdir: ${hydra.job.config_name}__${hydra.job.override_dirname}

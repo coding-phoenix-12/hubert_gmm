@@ -429,3 +429,124 @@ class BinarizedAudioDataset(RawAudioDataset):
             v["precomputed_mask"] = mask
 
         return v
+
+
+class FileMelSpecDataset(RawAudioDataset):
+    def __init__(
+        self,
+        manifest_path,
+        sample_rate,
+        max_sample_size=None,
+        min_sample_size=0,
+        shuffle=True,
+        pad=False,
+        normalize=False,
+        num_buckets=0,
+        compute_mask=False,
+        text_compression_level=TextCompressionLevel.none,
+        **mask_compute_kwargs,
+    ):
+        super().__init__(
+            sample_rate=sample_rate,
+            max_sample_size=max_sample_size,
+            min_sample_size=min_sample_size,
+            shuffle=shuffle,
+            pad=pad,
+            normalize=normalize,
+            compute_mask=compute_mask,
+            **mask_compute_kwargs,
+        )
+
+        self.text_compressor = TextCompressor(level=text_compression_level)
+
+        skipped = 0
+        self.fnames = []
+        sizes = []
+        self.skipped_indices = set()
+
+        with open(manifest_path, "r") as f:
+            self.root_dir = f.readline().strip()
+            for i, line in enumerate(f):
+                items = line.strip().split("\t")
+                assert len(items) == 2, line
+                sz = int(items[1])
+                if min_sample_size is not None and sz < min_sample_size:
+                    skipped += 1
+                    self.skipped_indices.add(i)
+                    continue
+                self.fnames.append(self.text_compressor.compress(items[0]))
+                sizes.append(sz)
+        logger.info(f"loaded {len(self.fnames)}, skipped {skipped} samples")
+
+        self.sizes = np.array(sizes, dtype=np.int64)
+
+        try:
+            import pyarrow
+
+            self.fnames = pyarrow.array(self.fnames)
+        except:
+            logger.debug(
+                "Could not create a pyarrow array. Please install pyarrow for better performance"
+            )
+            pass
+
+        self.set_bucket_info(num_buckets)
+
+    def __getitem__(self, index):
+        import soundfile as sf
+
+        fn = self.fnames[index]
+        fn = fn if isinstance(self.fnames, list) else fn.as_py()
+        fn = self.text_compressor.decompress(fn)
+        path_or_fp = os.path.join(self.root_dir, fn)
+        _path, slice_ptr = parse_path(path_or_fp)
+        if len(slice_ptr) == 2:
+            byte_data = read_from_stored_zip(_path, slice_ptr[0], slice_ptr[1])
+            assert is_sf_audio_data(byte_data)
+            path_or_fp = io.BytesIO(byte_data)
+
+        retry = 3
+        wav = None
+        for i in range(retry):
+            try:
+                wav, curr_sample_rate = sf.read(path_or_fp, dtype="float32")
+                break
+            except Exception as e:
+                logger.warning(
+                    f"Failed to read {path_or_fp}: {e}. Sleeping for {1 * i}"
+                )
+                time.sleep(1 * i)
+
+        if wav is None:
+            raise Exception(f"Failed to load {path_or_fp}")
+
+        feats = torch.from_numpy(wav).float()
+        # feats = self.postprocess(feats, curr_sample_rate)
+        waveform = feats*(2**15)
+        feats = torchaudio.compliance.kaldi.fbank(
+                            waveform,
+                            num_mel_bins=40,
+                            sample_frequency=16000,
+                            window_type='hamming',
+                            frame_length=25,
+                            frame_shift=10)
+
+        v = {"id": index, "source": feats}
+
+        if self.is_compute_mask:
+            T = self._get_mask_indices_dims(feats.size(-1))
+            mask = compute_block_mask_1d(
+                shape=(self.clone_batch, T),
+                mask_prob=self.mask_prob,
+                mask_length=self.mask_length,
+                mask_prob_adjust=self.mask_prob_adjust,
+                inverse_mask=self.inverse_mask,
+                require_same_masks=True,
+                expand_adjcent=self.expand_adjacent,
+                mask_dropout=self.mask_dropout,
+                non_overlapping=self.non_overlapping,
+            )
+
+            v["precomputed_mask"] = mask
+
+        return v

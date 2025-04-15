@@ -15,7 +15,7 @@ from typing import Optional, OrderedDict
 from fairseq.data.multi_corpus_dataset import MultiCorpusDataset
 from omegaconf import MISSING, II, OmegaConf
 
-from fairseq.data import BinarizedAudioDataset, FileAudioDataset, SubsampleDataset
+from fairseq.data import BinarizedAudioDataset, FileAudioDataset, SubsampleDataset, FileMelSpecDataset
 from fairseq.dataclass import FairseqDataclass, ChoiceEnum
 from fairseq.data.text_compressor import TextCompressionLevel
 
@@ -150,7 +150,20 @@ class AudioPretrainingTask(FairseqTask):
             if task_cfg.multi_corpus_keys is None:
                 manifest_path = os.path.join(data_path, "{}.tsv".format(split))                
 
-                self.datasets[split] = FileAudioDataset(
+                # self.datasets[split] = FileAudioDataset(
+                #     manifest_path=manifest_path,
+                #     sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
+                #     max_sample_size=self.cfg.max_sample_size,
+                #     min_sample_size=self.cfg.min_sample_size,
+                #     pad=task_cfg.labels is not None or task_cfg.enable_padding,
+                #     normalize=task_cfg.normalize,
+                #     num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
+                #     text_compression_level=text_compression_level,
+                #     compute_mask=compute_mask,
+                #     **mask_args,
+                # )
+                
+                self.datasets[split] = FileMelSpecDataset(
                     manifest_path=manifest_path,
                     sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
                     max_sample_size=self.cfg.max_sample_size,
@@ -162,6 +175,7 @@ class AudioPretrainingTask(FairseqTask):
                     compute_mask=compute_mask,
                     **mask_args,
                 )
+                
             else:
                 dataset_map = OrderedDict()
                 self.dataset_map = {}
@@ -178,18 +192,31 @@ class AudioPretrainingTask(FairseqTask):
                     manifest_path = os.path.join(data_path, "{}.tsv".format(file_name.strip()))                
 
                     # TODO: Remove duplication of code from the if block above
-                    dataset_map[k] = FileAudioDataset(
-                        manifest_path=manifest_path,
-                        sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
-                        max_sample_size=self.cfg.max_sample_size,
-                        min_sample_size=self.cfg.min_sample_size,
-                        pad=task_cfg.labels is not None or task_cfg.enable_padding,
-                        normalize=task_cfg.normalize,
-                        num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
-                        text_compression_level=text_compression_level,
-                        compute_mask=compute_mask,
-                        corpus_key=corpus_idx_map[k],
-                        **mask_args,
+                    # dataset_map[k] = FileAudioDataset(
+                    #     manifest_path=manifest_path,
+                    #     sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
+                    #     max_sample_size=self.cfg.max_sample_size,
+                    #     min_sample_size=self.cfg.min_sample_size,
+                    #     pad=task_cfg.labels is not None or task_cfg.enable_padding,
+                    #     normalize=task_cfg.normalize,
+                    #     num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
+                    #     text_compression_level=text_compression_level,
+                    #     compute_mask=compute_mask,
+                    #     corpus_key=corpus_idx_map[k],
+                    #     **mask_args,
+                    # )
+                    
+                    self.datasets[split] = FileMelSpecDataset(
+                    manifest_path=manifest_path,
+                    sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
+                    max_sample_size=self.cfg.max_sample_size,
+                    min_sample_size=self.cfg.min_sample_size,
+                    pad=task_cfg.labels is not None or task_cfg.enable_padding,
+                    normalize=task_cfg.normalize,
+                    num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
+                    text_compression_level=text_compression_level,
+                    compute_mask=compute_mask,
+                    **mask_args,
                     )
 
                     data_weights.append(multi_corpus_sampling_weights[corpus_idx_map[k]])

@@ -20,6 +20,7 @@ from fairseq.data.audio.audio_utils import (
     read_from_stored_zip,
 )
 import io
+import torchaudio
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ def load_label(label_path, inds, tot):
 
 
 def load_label_offset(label_path, inds, tot):
+    print("load_label_offset", label_path)
     with open(label_path) as f:
         code_lengths = [len(line.encode("utf-8")) for line in f]
         assert (
@@ -200,15 +202,17 @@ class HubertDataset(FairseqDataset):
 
         if self.label_processors is not None:
             label = self.label_processors[label_idx](label)
+            
         return label
 
     def get_labels(self, index):
         return [self.get_label(index, i) for i in range(self.num_labels)]
 
     def __getitem__(self, index):
-        wav = self.get_audio(index)
+        wav = self.load_torch_audio(index)
+        feats = self.get_melspec(wav)
         labels = self.get_labels(index)
-        return {"id": index, "source": wav, "label_list": labels}
+        return {"id": index, "source": feats, "label_list": labels}
 
     def __len__(self):
         return len(self.sizes)
@@ -235,9 +239,9 @@ class HubertDataset(FairseqDataset):
         audios = [s["source"] for s in samples]
         audio_sizes = [len(s) for s in audios]
         if self.pad_audio:
-            audio_size = min(max(audio_sizes), self.max_sample_size)
+            audio_size = min(max(audio_sizes), self.max_sample_size // 160)
         else:
-            audio_size = min(min(audio_sizes), self.max_sample_size)
+            audio_size = min(min(audio_sizes), self.max_sample_size // 160)
         collated_audios, padding_mask, audio_starts = self.collater_audio(
             audios, audio_size
         )
@@ -254,7 +258,9 @@ class HubertDataset(FairseqDataset):
             "id": torch.LongTensor([s["id"] for s in samples]),
             "net_input": net_input,
         }
-
+            
+            
+        
         if self.single_target:
             batch["target_lengths"] = lengths_list[0]
             batch["ntokens"] = ntokens_list[0]
@@ -266,7 +272,7 @@ class HubertDataset(FairseqDataset):
         return batch
 
     def collater_audio(self, audios, audio_size):
-        collated_audios = audios[0].new_zeros(len(audios), audio_size)
+        collated_audios = audios[0].new_zeros(len(audios), audio_size, 40)
         padding_mask = (
             torch.BoolTensor(collated_audios.shape).fill_(False)
             # if self.pad_audio else None
@@ -288,16 +294,16 @@ class HubertDataset(FairseqDataset):
 
     def collater_frm_label(self, targets, audio_size, audio_starts, label_rate, pad):
         assert label_rate > 0
-        s2f = label_rate / self.sample_rate
+        s2f = 1
         frm_starts = [int(round(s * s2f)) for s in audio_starts]
         frm_size = int(round(audio_size * s2f))
         if not self.pad_audio:
             rem_size = [len(t) - s for t, s in zip(targets, frm_starts)]
             frm_size = min(frm_size, *rem_size)
         targets = [t[s : s + frm_size] for t, s in zip(targets, frm_starts)]
-        logger.debug(f"audio_starts={audio_starts}")
-        logger.debug(f"frame_starts={frm_starts}")
-        logger.debug(f"frame_size={frm_size}")
+        # logger.debug(f"audio_starts={audio_starts}")
+        # logger.debug(f"frame_starts={frm_starts}")
+        # logger.debug(f"frame_size={frm_size}")
 
         lengths = torch.LongTensor([len(t) for t in targets])
         ntokens = lengths.sum().item()
@@ -354,3 +360,21 @@ class HubertDataset(FairseqDataset):
             with torch.no_grad():
                 wav = F.layer_norm(wav, wav.shape)
         return wav
+
+
+    def get_melspec(self, wav):
+        wav = wav*(2**15)
+        feats = torchaudio.compliance.kaldi.fbank(
+                    wav,
+                    num_mel_bins=40,
+                    sample_frequency=16000,
+                    window_type='hamming',
+                    frame_length=25,
+                    frame_shift=10) 
+        
+        return feats
+    
+    def load_torch_audio(self, index):
+        wav_path = os.path.join(self.audio_root, self.audio_names[index])
+        waveform, sr = torchaudio.load(wav_path)
+        return waveform

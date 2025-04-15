@@ -6,9 +6,12 @@
 import logging
 import os
 import sys
+import torch
 
 import numpy as np
-from sklearn.cluster import MiniBatchKMeans
+from sklearn.mixture import GaussianMixture
+sys.path.insert(1, "/home1/jesuraj/asr/gmmhubert/gmm-torch")
+# from gmm import GaussianMixture
 
 import joblib
 
@@ -18,33 +21,36 @@ logging.basicConfig(
     level=os.environ.get("LOGLEVEL", "INFO").upper(),
     stream=sys.stdout,
 )
-logger = logging.getLogger("learn_kmeans")
+logger = logging.getLogger("learn_gmm")
 
 
-def get_km_model(
-    n_clusters,
-    init,
+def get_gmm_model(
+    n_components,
+    covariance_type,
     max_iter,
-    batch_size,
     tol,
-    max_no_improvement,
     n_init,
-    reassignment_ratio,
+    init_params,
 ):
-    return MiniBatchKMeans(
-        n_clusters=n_clusters,
-        init=init,
+    return GaussianMixture(
+        n_components=n_components,
+        covariance_type=covariance_type,
         max_iter=max_iter,
-        batch_size=batch_size,
-        verbose=1,
-        compute_labels=False,
         tol=tol,
-        max_no_improvement=max_no_improvement,
-        init_size=None,
         n_init=n_init,
-        reassignment_ratio=reassignment_ratio,
-        
+        init_params=init_params,
+        verbose=1,
+        reg_covar=1e-3,
+        warm_start=False,
+        random_state=None,
     )
+    
+    # return GaussianMixture(
+    #     n_components=n_components,
+    #     n_features=40,
+    #     covariance_type=covariance_type,
+    #     init_params=init_params,
+    # )
 
 
 def load_feature_shard(feat_dir, split, nshard, rank, percent):
@@ -85,39 +91,39 @@ def load_feature(feat_dir, split, nshard, seed, percent):
     return feat
 
 
-def learn_kmeans(
+def learn_gmm(
     feat_dir,
     split,
     nshard,
-    km_path,
-    n_clusters,
+    gmm_path,
+    n_components,
     seed,
     percent,
     init,
     max_iter,
-    batch_size,
     tol,
     n_init,
-    reassignment_ratio,
-    max_no_improvement,
+    covariance_type,
+    device,
 ):
     np.random.seed(seed)
     feat = load_feature(feat_dir, split, nshard, seed, percent)
-    km_model = get_km_model(
-        n_clusters,
-        init,
+    # feat = torch.from_numpy(feat).float().to(device)
+    gmm_model = get_gmm_model(
+        n_components,
+        covariance_type,
         max_iter,
-        batch_size,
         tol,
-        max_no_improvement,
         n_init,
-        reassignment_ratio,
+        init,
     )
-    km_model.fit(feat)
-    joblib.dump(km_model, km_path)
+    gmm_model.fit(feat)
+    # gmm_model.fit(feat, n_iter=max_iter, delta=tol)
+    joblib.dump(gmm_model, gmm_path)
 
-    inertia = -km_model.score(feat) / len(feat)
-    logger.info("total intertia: %.5f", inertia)
+    # inertia = gmm_model.score_samples(feat) / len(feat)
+    inertia = gmm_model.score(feat)
+    logger.info("total log-likelihood: %.5f", inertia)
     logger.info("finished successfully")
 
 
@@ -128,20 +134,19 @@ if __name__ == "__main__":
     parser.add_argument("feat_dir", type=str)
     parser.add_argument("split", type=str)
     parser.add_argument("nshard", type=int)
-    parser.add_argument("km_path", type=str)
-    parser.add_argument("n_clusters", type=int)
+    parser.add_argument("gmm_path", type=str)
+    parser.add_argument("n_components", type=int)
+    parser.add_argument("--covariance_type", default='diag', type=str)
     parser.add_argument("--seed", default=0, type=int)
     parser.add_argument(
         "--percent", default=-1, type=float, help="sample a subset; -1 for all"
     )
     parser.add_argument("--init", default="k-means++")
     parser.add_argument("--max_iter", default=100, type=int)
-    parser.add_argument("--batch_size", default=10000, type=int)
     parser.add_argument("--tol", default=0.0, type=float)
-    parser.add_argument("--max_no_improvement", default=100, type=int)
     parser.add_argument("--n_init", default=20, type=int)
-    parser.add_argument("--reassignment_ratio", default=0.0, type=float)
+    parser.add_argument("--device", default="cpu", type=str)
     args = parser.parse_args()
     logging.info(str(args))
 
-    learn_kmeans(**vars(args))
+    learn_gmm(**vars(args))

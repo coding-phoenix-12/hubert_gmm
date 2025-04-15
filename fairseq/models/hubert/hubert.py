@@ -45,6 +45,12 @@ class HubertConfig(FairseqDataclass):
             "has layer norms in every block (meant to use with normalize=True)"
         },
     )
+    
+    mel_dim: int = field(
+        default=40, metadata={"help": "mel feature dimension"}
+    )
+        
+        
     encoder_layers: int = field(
         default=12, metadata={"help": "num encoder layers in the transformer"}
     )
@@ -258,20 +264,24 @@ class HubertModel(BaseFairseqModel):
         feature_enc_layers = eval(cfg.conv_feature_layers)  # noqa
         self.embed = feature_enc_layers[-1][0]
 
-        self.feature_extractor = ConvFeatureExtractionModel(
-            conv_layers=feature_enc_layers,
-            dropout=0.0,
-            mode=cfg.extractor_mode,
-            conv_bias=cfg.conv_bias,
-        )
+        # self.feature_extractor = ConvFeatureExtractionModel(
+        #     conv_layers=feature_enc_layers,
+        #     dropout=0.0,
+        #     mode=cfg.extractor_mode,
+        #     conv_bias=cfg.conv_bias,
+        # )
+        
         feature_ds_rate = np.prod([s for _, _, s in feature_enc_layers])
-        self.feat2tar_ratio = cfg.label_rate * feature_ds_rate / task_cfg.sample_rate
+        # self.feat2tar_ratio = cfg.label_rate * feature_ds_rate / task_cfg.sample_rate
+        self.feat2tar_ratio = 1
 
         self.post_extract_proj = (
-            nn.Linear(self.embed, cfg.encoder_embed_dim)
+            nn.Linear(cfg.mel_dim, cfg.encoder_embed_dim)
             if self.embed != cfg.encoder_embed_dim
             else None
         )
+        
+       
 
         self.mask_prob = cfg.mask_prob
         self.mask_selection = cfg.mask_selection
@@ -409,6 +419,7 @@ class HubertModel(BaseFairseqModel):
         target_list: List[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Trim features to ensure labels exist and then get aligned labels
+        features = features.transpose(1, 2)
         feat_tsz = features.size(2)
         targ_tsz = min([t.size(1) for t in target_list])
         if self.feat2tar_ratio * feat_tsz > targ_tsz:
@@ -416,6 +427,7 @@ class HubertModel(BaseFairseqModel):
             features = features[..., :feat_tsz]
         target_inds = torch.arange(feat_tsz).float() * self.feat2tar_ratio
         target_list = [t[:, target_inds.long()] for t in target_list]
+        features = features.transpose(1, 2)
         return features, target_list
 
     def forward_padding_mask(
@@ -440,15 +452,24 @@ class HubertModel(BaseFairseqModel):
         output_layer: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         """output layer is 1-based"""
-        features = self.forward_features(source)
+        # features = self.forward_features(source)
+        # if target_list is not None:
+        #     features, target_list = self.forward_targets(features, target_list)
+
+        # features_pen = features.float().pow(2).mean()
+
+        # features = features.transpose(1, 2)
+        # features = self.mel_proj(source)
+        # unmasked_features = features.clone()
+        
+        
         if target_list is not None:
-            features, target_list = self.forward_targets(features, target_list)
-
-        features_pen = features.float().pow(2).mean()
-
-        features = features.transpose(1, 2)
-        features = self.layer_norm(features)
+            features, target_list = self.forward_targets(source, target_list)
+            
+        features_pen = features.mean()
         unmasked_features = features.clone()
+    
+        
 
         if padding_mask is not None:
             padding_mask = self.forward_padding_mask(features, padding_mask)
